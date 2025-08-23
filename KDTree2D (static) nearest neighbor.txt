@@ -1,0 +1,143 @@
+// KDTree2D (static): nearest neighbor only
+// - 좌표형: ld, Point { ld x,y; }  /  diff, dist2(Point,Point) 사용
+// - build: 평균 O(n log n), query: 평균 O(log n) ~ O(sqrt n)
+// - 인덱스/카운트는 전부 ll, 인덱스 배열은 vl
+
+struct KDTree2D {
+    struct Node {
+        ll idx = -1, left = -1, right = -1;  // pts[idx]
+        ld minx, maxx, miny, maxy;           // subtree bbox
+        uint8_t axis = 0;                    // 0:x, 1:y
+    };
+
+    const vector<Point>* pts = nullptr;
+    vl ord;
+    vector<Node> tr;
+
+    KDTree2D() = default;
+    KDTree2D(const vector<Point>& P){ build(P); }
+
+    void build(const vector<Point>& P){
+        pts = &P;
+        ord.resize((ll)P.size());
+        iota(ord.begin(), ord.end(), 0LL);
+        tr.clear(); tr.reserve(P.size()*2);
+        if(!ord.empty()) build_rec(0, (ll)ord.size());
+    }
+
+    // 최근접 하나: {최소 제곱거리, idx}, 필요시 pred로 필터링
+    template<class Pred = std::nullptr_t>
+    pair<ld,ll> nearest(const Point& q, Pred pred = nullptr) const {
+        if(tr.empty()) return { numeric_limits<ld>::infinity(), (ll)-1 };
+        ld best = numeric_limits<ld>::infinity(); ll bestIdx = -1;
+        nearest_rec(0, q, best, bestIdx, pred);
+        return {best, bestIdx};
+    }
+
+    // ── 내부 구현(간결)
+    static inline bool lex_lt(const Point& a, const Point& b){
+        ll t = diff(a.x,b.x); if(t) return t<0; return diff(a.y,b.y)<0;
+    }
+    static inline ld boxDist2(const Point& q, const Node& nd){
+        ld dx=0, dy=0;
+        if(diff(q.x,nd.minx)<0) dx=nd.minx-q.x; else if(diff(q.x,nd.maxx)>0) dx=q.x-nd.maxx;
+        if(diff(q.y,nd.miny)<0) dy=nd.miny-q.y; else if(diff(q.y,nd.maxy)>0) dy=q.y-nd.maxy;
+        return dx*dx + dy*dy;
+    }
+
+    ll build_rec(ll l, ll r){
+        auto mn = (*pts)[ord[l]], mx = mn;
+        for(ll i=l+1;i<r;i++){
+            const auto& p = (*pts)[ord[i]];
+            if(diff(p.x,mn.x)<0) mn.x=p.x; if(diff(p.x,mx.x)>0) mx.x=p.x;
+            if(diff(p.y,mn.y)<0) mn.y=p.y; if(diff(p.y,mx.y)>0) mx.y=p.y;
+        }
+        uint8_t axis = ((mx.y - mn.y) > (mx.x - mn.x) ? 1 : 0);
+        ll m = (l + r) >> 1;
+        nth_element(ord.begin()+l, ord.begin()+m, ord.begin()+r, [&](ll a, ll b){
+            const auto &pa=(*pts)[a], &pb=(*pts)[b];
+            if(axis==0){ if(diff(pa.x,pb.x)) return pa.x<pb.x; return diff(pa.y,pb.y)<0; }
+            else        { if(diff(pa.y,pb.y)) return pa.y<pb.y; return diff(pa.x,pb.x)<0; }
+        });
+        ll me = (ll)tr.size(); tr.push_back({});
+        tr[me].idx = ord[m]; tr[me].axis = axis;
+        tr[me].left  = (l<m)     ? build_rec(l, m)     : -1;
+        tr[me].right = (m+1<r)   ? build_rec(m+1, r)   : -1;
+        tr[me].minx=mn.x; tr[me].maxx=mx.x; tr[me].miny=mn.y; tr[me].maxy=mx.y;
+        return me;
+    }
+
+    template<class Pred>
+    void nearest_rec(ll node, const Point& q, ld& best, ll& bestIdx, Pred pred) const {
+        if(node==-1) return;
+        const auto& nd = tr[node];
+        if(diff(boxDist2(q,nd), best)>0) return;
+
+        auto try_upd = [&](ll idx){
+            const auto& t = (*pts)[idx];
+            ld d2 = dist2(q, t);
+            if(diff(d2,best)<0 || (diff(d2,best)==0 && (bestIdx==-1 || lex_lt(t, (*pts)[bestIdx])))){
+                best=d2; bestIdx=idx;
+            }
+        };
+
+        if constexpr (std::is_same_v<Pred,std::nullptr_t>) try_upd(nd.idx);
+        else if (pred(nd.idx)) try_upd(nd.idx);
+
+        const auto& p = (*pts)[nd.idx];
+        ll a = nd.left, b = nd.right, nearC=-1, farC=-1;
+        if(nd.axis==0){ nearC = (diff(q.x,p.x)<=0? a:b); farC=(nearC==a? b:a); }
+        else          { nearC = (diff(q.y,p.y)<=0? a:b); farC=(nearC==a? b:a); }
+        if(nearC!=-1) nearest_rec(nearC, q, best, bestIdx, pred);
+        if(farC!=-1 && diff(boxDist2(q,tr[farC]), best)<=0) nearest_rec(farC, q, best, bestIdx, pred);
+    }
+};
+
+build: nlogn
+쿼리: logn ~ sqrt(n), 최악 n
+
+한 점의 최근접 이웃
+vector<Point> P = { {0,0}, {5,2}, {3,7} };
+KDTree2D kd(P);
+
+Point q{4,3};
+auto [d2, idx] = kd.nearest(q);
+if (idx != -1) {
+    Point nn = P[idx];
+    // d2 = dist2(q, nn)
+}
+
+2. 두 집합 사이 최소 거리 쌍
+vector<Point> A, B; // 각 집합 점들
+KDTree2D kdB(B);    // B로 트리
+ld best = numeric_limits<ld>::infinity(); pll best_pair;
+
+for (ll i=0;i<(ll)A.size();i++) {
+    auto [d2, idx] = kdB.nearest(A[i]);   // 필터 불필요(전부 B)
+    if (idx==-1) continue;
+    if (diff(d2, best) < 0) { best=d2; best_pair={i, idx}; }
+}
+// 필요하면 반대방향(B→A)도 한 번 더 돌려 동률·안정성 강화
+
+3. 자기 자신 제외 최근접
+vector<Point> P; vl id(P.size());
+iota(id.begin(), id.end(), 0);
+KDTree2D kd(P);
+
+for (ll i=0;i<(ll)P.size();i++) {
+    auto [d2, idx] = kd.nearest(P[i], [&](ll j){ return j != i; });
+    // idx: 자기 자신 아닌 최근접 인덱스
+}
+
+3) KD-트리 말고 구조 자체를 바꾸기 (정확)
+(a) 드로네 삼각분할 / 보로노이 + 포인트 로케이션
+
+빌드 O(nlogn), 최근접 질의 O(logn) (이론상).
+
+구현이 무거움(직접 구현은 팀노트에 부담). 라이브러리(CGAL 등)가 있으면 베스트.
+
+(b) Range-tree / R-Tree / Ball-tree / VP-tree
+
+각각 장단이 다름. 팀노트 관점에서는 KD-트리 다음 선택지가 무거워지는 편.
+
+**근사(Approx)**가 허용되면 HNSW/LSH/FLANN류가 압도적이지만, 알고리즘 문제에선 보통 정확을 요구하니 위 정확 해법들을 권장.
